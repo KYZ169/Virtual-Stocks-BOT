@@ -29,6 +29,7 @@ tree = client.tree  # ショートカット参照
 
 @client.event
 async def on_ready():
+    await tree.sync()
     stock_manager.init_db()
     asyncio.create_task(auto_sell_loop(client))
     asyncio.create_task(price_update_loop())
@@ -178,10 +179,16 @@ async def 買う(interaction: discord.Interaction, symbol: str, amount: int, aut
 @app_commands.describe(symbol="銘柄名（例: VELT）", amount="売却する口数（空欄なら全数）")
 async def 売る(interaction: discord.Interaction, symbol: str, amount: int):
     user_id = str(interaction.user.id)
-    message = await stock_trading.sell_stock(user_id, symbol.upper(), amount)
-    await interaction.response.send_message(message, ephemeral=True)
+    try:
+        # ✅ 非同期ラッパーを使う（手動売却なので auto=False）
+        message = await stock_trading.sell_stock_async(user_id, symbol.upper(), amount, auto=False)
+        await interaction.response.send_message(message)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        await interaction.response.send_message(f"エラーが発生しました: {e}", ephemeral=True)
 
-#自動売却ループ
+# 自動売却ループ（変更不要）
 async def auto_sell_loop(client):
     await client.wait_until_ready()
 
@@ -199,7 +206,7 @@ async def auto_sell_loop(client):
 
         for user_id, symbol, amount in rows:
             try:
-                message = await stock_trading.sell_stock_async(user_id, symbol, amount)
+                message = await stock_trading.sell_stock_async(user_id, symbol, amount, auto=True)
                 user = await client.fetch_user(int(user_id))
                 await user.send(f"💸 {message}")
             except Exception as e:

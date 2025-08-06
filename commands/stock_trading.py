@@ -184,6 +184,7 @@ def get_all_current_prices_message():
         msg += f"・{symbol}: {price:.0f} Vety\n"
     return msg
 
-async def sell_stock_async(user_id: str, symbol: str, amount: int):
+# 非同期ラッパー：同期のsell_stockを非同期で使えるようにする
+async def sell_stock_async(user_id: str, symbol: str, amount: int, auto: bool = False):
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, sell_stock, user_id, symbol, amount, True)
+    return await loop.run_in_executor(None, sell_stock, user_id, symbol, amount, auto)
