@@ -2,10 +2,6 @@ import matplotlib.pyplot as plt
 import sqlite3
 import datetime
 import os
-from matplotlib import font_manager, rc
-font_path = "C:/Windows/Fonts/YuGothR.ttc"  # または "meiryo.ttc", "msgothic.ttc" など
-font_prop = font_manager.FontProperties(fname=font_path)
-rc('font', family=font_prop.get_name())
 
 DB_PATH = "stock_data.db"
 
