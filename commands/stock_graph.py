@@ -37,9 +37,9 @@ def generate_stock_graph(symbol: str, filename: str) -> bool:
     ax.plot(times[prices.index(max_price)], max_price, marker='o', color='green', markersize=8)
     ax.plot(times[prices.index(min_price)], min_price, marker='o', color='red', markersize=8)
 
-    ax.set_title(f'{symbol} 株価推移', fontproperties=font_prop)
-    ax.set_xlabel('日時', fontproperties=font_prop)
-    ax.set_ylabel('価格', fontproperties=font_prop)
+    ax.set_title(f'{symbol} 株価推移')
+    ax.set_xlabel('日時')
+    ax.set_ylabel('価格')
 
     ax.grid(True)
     fig.autofmt_xdate()
