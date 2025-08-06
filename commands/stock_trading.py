@@ -133,7 +133,7 @@ def sell_stock(user_id: str, symbol: str, amount: int, auto: bool = False):
         c.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (total_revenue, user_id))
 
         conn.commit()
-        return f"{symbol}を {sold_amount}口 売却し {round(total_revenue)}円 を受け取りました。(損益：{round(total_profit_or_loss):+}円)"
+        return f"{symbol}を {sold_amount}口 売却し {round(total_revenue)}Vety を受け取りました。(損益：{round(total_profit_or_loss):+}Vety)"
 
 # --- 株取引機能 ---
 
@@ -173,7 +173,7 @@ def buy_stock(user_id: str, symbol: str, amount: int, auto_sell_minutes: int = 0
         """, (user_id, symbol, amount, price, auto_sell_time))
 
         conn.commit()
-        return f"{symbol} を 1口 {price}円で{amount}口 購入しました（合計{price * amount}円）"
+        return f"{symbol} を 1口 {price}Vetyで{amount}口 購入しました（合計{price * amount}Vety）"
 
 def get_all_current_prices_message():
     rows = get_all_stock_prices()
@@ -181,7 +181,7 @@ def get_all_current_prices_message():
         return "📉 現在、登録されている銘柄がありません。"
     msg = "💹 **現在の全銘柄価格**\n"
     for symbol, price in rows:
-        msg += f"・{symbol}: {price:.0f} 円\n"
+        msg += f"・{symbol}: {price:.0f} Vety\n"
     return msg
 
 async def sell_stock_async(user_id: str, symbol: str, amount: int):

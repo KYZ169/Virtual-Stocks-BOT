@@ -122,7 +122,7 @@ def log_current_prices():
 
             # チャンネル通知メッセージ作成
             if channel_id:
-                message = f"`{symbol}` の現在価格: `{current_price}`円（前回比: {delta:+}円）"
+                message = f"`{symbol}` の現在価格: `{current_price}`Vety（前回比: {delta:+}Vety）"
                 updates.append((int(channel_id), message))
 
         conn.commit()
