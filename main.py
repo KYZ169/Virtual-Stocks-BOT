@@ -182,7 +182,7 @@ async def 売る(interaction: discord.Interaction, symbol: str, amount: int):
     try:
         # ✅ 非同期ラッパーを使う（手動売却なので auto=False）
         message = await stock_trading.sell_stock_async(user_id, symbol.upper(), amount, auto=False)
-        await interaction.response.send_message(message)
+        await interaction.response.send_message(message, ephemeral=True)
     except Exception as e:
         import traceback
         traceback.print_exc()
