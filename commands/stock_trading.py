@@ -11,6 +11,12 @@ def get_connection():
 
 # --- 共通関数 ---
 
+def get_all_stock_prices():
+    with get_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT symbol, price FROM stocks ORDER BY symbol ASC")
+        return c.fetchall()
+    
 def get_current_price(symbol: str):
     with get_connection() as conn:
         cur = conn.execute("SELECT price FROM stocks WHERE symbol = ?", (symbol,))
@@ -50,6 +56,85 @@ def get_user_holdings(user_id: str):
         """, (user_id,))
         return c.fetchall()
 
+def sell_stock(user_id: str, symbol: str, amount: int, auto: bool = False):
+    with get_connection() as conn:
+        c = conn.cursor()
+
+        current_price = get_current_price(symbol)
+        if current_price is None:
+            return "銘柄が存在しません"
+        
+        # 所有数確認
+        if auto:
+            c.execute("SELECT SUM(amount) FROM user_stocks WHERE user_id = ? AND symbol = ? AND auto_sell_time IS NOT NULL", (user_id, symbol))
+        else:
+            c.execute("SELECT SUM(amount) FROM user_stocks WHERE user_id = ? AND symbol = ? AND auto_sell_time IS NULL", (user_id, symbol))
+        total_owned = c.fetchone()[0] or 0
+
+        if amount == 0:
+            amount = total_owned
+
+        if total_owned < amount:
+            return f"保有数が不足しています（保有: {total_owned} < 要求: {amount}）"
+
+        total_profit_or_loss = 0
+        remaining = amount
+
+        # 売却元取得（手動 or 自動）
+        if auto:
+            c.execute("SELECT rowid, amount, buy_price FROM user_stocks WHERE user_id = ? AND symbol = ? AND auto_sell_time IS NOT NULL ORDER BY rowid ASC", (user_id, symbol))
+        else:
+            c.execute("SELECT rowid, amount, buy_price FROM user_stocks WHERE user_id = ? AND symbol = ? AND auto_sell_time IS NULL ORDER BY rowid ASC", (user_id, symbol))
+        rows = c.fetchall()
+
+        if not rows:
+            return f"{symbol}を売却できる在庫が見つかりませんでした。"
+        
+        sold_amount = 0
+
+        # 売却処理（古い順）
+        for rowid, owned, buy_price in rows:
+            if remaining <= 0:
+                break
+
+            sell_now = min(owned, remaining)
+            revenue = sell_now * current_price
+            cost = sell_now * buy_price
+            profit_or_loss = revenue - cost
+            total_profit_or_loss += profit_or_loss
+
+            # ✅ 還元処理（損失がある場合、stocksごとのadded_by_user_idを参照）
+            if profit_or_loss < 0:
+                loss = abs(profit_or_loss)
+                c.execute("SELECT added_by_user_id FROM stocks WHERE symbol = ?", (symbol,))
+                added_by_result = c.fetchone()
+                added_by = added_by_result[0] if added_by_result else None
+
+                if added_by and added_by != user_id:
+                    c.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (int(loss), added_by))
+
+                # ✅ この位置に置くことでエラーを防げる
+                print(f"【DEBUG】損失 {loss}、追加者: {added_by}、売却者: {user_id}")
+            else:
+                # 損失がなかった場合でも DEBUG を出すならこちら
+                print(f"【DEBUG】損失なし、売却者: {user_id}")
+                
+            # 保有数更新
+            if owned == sell_now:
+                c.execute("DELETE FROM user_stocks WHERE rowid = ?", (rowid,))
+            else:
+                c.execute("UPDATE user_stocks SET amount = amount - ? WHERE rowid = ?", (sell_now, rowid))
+
+            remaining -= sell_now
+            sold_amount += sell_now
+
+        # 売却益を加算
+        total_revenue = current_price * sold_amount
+        c.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (total_revenue, user_id))
+
+        conn.commit()
+        return f"{symbol}を {sold_amount}口 売却し {round(total_revenue)}円 を受け取りました。(損益：{round(total_profit_or_loss):+}円)"
+
 # --- 株取引機能 ---
 
 def buy_stock(user_id: str, symbol: str, amount: int, auto_sell_minutes: int = 0):
@@ -58,12 +143,12 @@ def buy_stock(user_id: str, symbol: str, amount: int, auto_sell_minutes: int = 0
 
         price = get_current_price(symbol)
         if price is None:
-            return False, "銘柄が存在しません"
+            return "銘柄が存在しません"
 
         total_cost = round(price * amount)
         balance = get_balance(user_id)
         if balance < total_cost:
-            return False, f"残高不足（必要: {total_cost}）"
+            return f"残高不足（必要: {total_cost}）"
 
         # 残高減算
         c.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (total_cost, user_id))
@@ -88,80 +173,17 @@ def buy_stock(user_id: str, symbol: str, amount: int, auto_sell_minutes: int = 0
         """, (user_id, symbol, amount, price, auto_sell_time))
 
         conn.commit()
-        return True, f"{symbol} を 1口 {price}円で{amount}口 購入しました（合計{price * amount}円）"
+        return f"{symbol} を 1口 {price}円で{amount}口 購入しました（合計{price * amount}円）"
 
-async def sell_stock(user_id: str, symbol: str, amount: int) -> str:
-    price = get_current_price(symbol)
-    if price is None:
-        return f"❌ 銘柄 `{symbol}` が存在しません"
+def get_all_current_prices_message():
+    rows = get_all_stock_prices()
+    if not rows:
+        return "📉 現在、登録されている銘柄がありません。"
+    msg = "💹 **現在の全銘柄価格**\n"
+    for symbol, price in rows:
+        msg += f"・{symbol}: {price:.0f} 円\n"
+    return msg
 
-    holdings = get_user_manual_stocks(user_id, symbol)
-    if not holdings:
-        return f"❌ `{symbol}` の保有がありません"
-
-    total_amount = sum(row[0] for row in holdings)
-    if amount > total_amount:
-        return f"❌ 保有口数（{total_amount}口）未満しか売却できません"
-
-    remaining = amount
-    with get_connection() as conn:
-        c = conn.cursor()
-
-        # まず該当行を取得（rowid付きで）
-        c.execute("""
-            SELECT rowid, amount FROM user_stocks
-            WHERE user_id = ? AND symbol = ? AND auto_sell_time IS NULL
-            ORDER BY rowid ASC
-        """, (user_id, symbol))
-        rows = c.fetchall()
-
-        for rowid, held_amount in rows:
-            if remaining <= 0:
-                break
-
-            sell_amount = min(held_amount, remaining)
-            new_amount = held_amount - sell_amount
-
-            if new_amount > 0:
-                c.execute("UPDATE user_stocks SET amount = ? WHERE rowid = ?", (new_amount, rowid))
-            else:
-                c.execute("DELETE FROM user_stocks WHERE rowid = ?", (rowid,))
-            
-            remaining -= sell_amount
-
-        # 売却金額の加算
-        value = round(price * amount)
-        c.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (value, user_id))
-        conn.commit()
-
-    return f"💴 `{symbol}` を {amount}口 売却し {value}円 を受け取りました。"
-    
-async def auto_sell_loop(client):
-    await client.wait_until_ready()
-    while not client.is_closed():
-        await asyncio.sleep(30)
-        now = datetime.now().isoformat()
-
-        with get_connection() as conn:
-            c = conn.cursor()
-            c.execute("""
-                SELECT user_id, symbol, amount FROM user_stocks
-                WHERE auto_sell_time IS NOT NULL AND auto_sell_time <= ?
-            """, (now,))
-            rows = c.fetchall()
-
-            for user_id, symbol, amount in rows:
-                price = get_current_price(symbol)
-                if price:
-                    value = round(price * amount)
-                    c.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (value, user_id))
-
-                    try:
-                        user = await client.fetch_user(int(user_id))
-                        await user.send(f"💸 {symbol} を {amount}口 売却し {value}円を取得しました")
-                    except Exception as e:
-                        print(f"❌ DM送信エラー: {e}")
-
-            c.execute("DELETE FROM user_stocks WHERE auto_sell_time IS NOT NULL AND auto_sell_time <= ?", (now,))
-            conn.commit()
-
+async def sell_stock_async(user_id: str, symbol: str, amount: int):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, sell_stock, user_id, symbol, amount, True)

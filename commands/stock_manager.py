@@ -19,7 +19,9 @@ def init_db():
                 price INTEGER,
                 speed INTEGER,
                 min_fluct INTEGER,
-                max_fluct INTEGER
+                max_fluct INTEGER,
+                channel_id TEXT,
+                added_by_user_id TEXT
             )
         """)
         
@@ -88,36 +90,44 @@ def log_current_prices():
     with get_connection() as conn:
         c = conn.cursor()
         now = datetime.now().replace(microsecond=0)
-        
-        # 現在の価格を取得
-        c.execute("SELECT symbol, price FROM stocks")
-        current_prices = dict(c.fetchall())
 
-        # 各symbolの直前価格を一括取得
+        # 現在の価格、チャンネルIDを取得
+        c.execute("SELECT symbol, price, channel_id FROM stocks")
+        stock_rows = c.fetchall()
+
+        # 各symbolの前回価格を取得して差分計算
         prev_prices = {}
-        for symbol in current_prices.keys():
-            c.execute("""
-                SELECT price FROM stock_history 
-                WHERE symbol = ? 
-                ORDER BY timestamp DESC LIMIT 1
-            """, (symbol,))
-            row = c.fetchone()
-            prev_prices[symbol] = row[0] if row else None
+        for row in stock_rows:
+            symbol = row[0]
+            c.execute("""SELECT price FROM stock_history 
+                         WHERE symbol = ? 
+                         ORDER BY timestamp DESC LIMIT 1""", (symbol,))
+            fetched = c.fetchone()
+            prev_prices[symbol] = fetched[0] if fetched else None
 
-        # すべて挿入（全て同じ now でOK）
-        for symbol, current_price in current_prices.items():
-            prev_price = prev_prices[symbol]
+        updates = []
+
+        for symbol, current_price, channel_id in stock_rows:
+            prev_price = prev_prices.get(symbol)
             if prev_price is not None and current_price == prev_price:
-                continue  
+                continue
 
-            delta = round(current_price - prev_price) if prev_price is not None else None
+            delta = current_price - prev_price if prev_price is not None else 0
 
+            # 履歴に保存
             c.execute("""
                 INSERT INTO stock_history (symbol, timestamp, price, delta)
                 VALUES (?, ?, ?, ?)
             """, (symbol, now, current_price, delta))
 
+            # チャンネル通知メッセージ作成
+            if channel_id:
+                message = f"`{symbol}` の現在価格: `{current_price}`円（前回比: {delta:+}円）"
+                updates.append((int(channel_id), message))
+
         conn.commit()
+        return updates
+
 
 def cleanup_old_history(limit: int = 100):
     with get_connection() as conn:
@@ -147,25 +157,24 @@ def cleanup_old_history(limit: int = 100):
 
         conn.commit()
  
-def add_stock(symbol, price, speed, min_fluct, max_fluct):
+def add_stock(symbol, price, speed, min_fluct, max_fluct, channel_id, added_by_user_id):
     with get_connection() as conn:
-        conn.execute("""
-            INSERT OR REPLACE INTO stocks (symbol, price, speed, min_fluct, max_fluct)
-            VALUES (?, ?, ?, ?, ?)
-        """, (symbol, price, speed, min_fluct, max_fluct))
+        c = conn.cursor()
+        c.execute("""
+            INSERT OR REPLACE INTO stocks 
+            (symbol, price, speed, min_fluct, max_fluct, channel_id, added_by_user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (symbol, price, speed, min_fluct, max_fluct, channel_id, added_by_user_id))
+        conn.commit()
 
 def delete_stock(symbol):
     with get_connection() as conn:
         conn.execute("DELETE FROM stocks WHERE symbol = ?", (symbol,))
+        conn.execute("DELETE FROM user_stocks WHERE symbol = ?", (symbol,))
+        conn.execute("DELETE FROM stock_history WHERE symbol = ?", (symbol,))
 
 def get_price(symbol):
     with get_connection() as conn:
         cur = conn.execute("SELECT price FROM stocks WHERE symbol = ?", (symbol,))
         result = cur.fetchone()
         return result[0] if result else None
-
-@tasks.loop(seconds=1)
-async def auto_update_prices():
-    random_update_prices()
-    log_current_prices()
-    cleanup_old_history()
