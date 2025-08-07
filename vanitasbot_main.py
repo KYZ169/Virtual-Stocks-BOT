@@ -212,4 +212,52 @@ async def auto_sell_loop(client):
             except Exception as e:
                 print(f"❌ 自動売却エラー: {e}")
 
+# 送金コマンド
+@tree.command(name="送金", description="他ユーザーにVetyを送金します")
+@app_commands.describe(member="送金先ユーザー", amount="送金額")
+async def 送金(interaction: discord.Interaction, member: discord.Member, amount: float):
+    from_id = str(interaction.user.id)
+    to_id = str(member.id)
+
+    user_manager.init_user(from_id)
+    user_manager.init_user(to_id)
+
+    if from_id == to_id:
+        await interaction.response.send_message("❌ 自分に送金することはできません。", ephemeral=True)
+        return
+
+    if amount <= 0:
+        await interaction.response.send_message("❌ 正の数を入力してください。", ephemeral=True)
+        return
+
+    success = user_manager.transfer_balance(from_id, to_id, amount)
+    if success:
+        await interaction.response.send_message(f"✅ {interaction.user.display_name} から {member.display_name} に {amount} Vety を送金しました。")
+    else:
+        await interaction.response.send_message("❌ 残高が不足しています。", ephemeral=True)
+
+# 減額コマンド
+@tree.command(name="減額", description="指定ユーザーのVetyを減額します（管理者のみ）")
+@app_commands.describe(member="対象ユーザー", amount="減額額")
+async def 減額(interaction: discord.Interaction, member: discord.Member, amount: float):
+    allowed_roles = ['終界主', '宰律士']
+    user_roles = [role.name for role in interaction.user.roles]
+
+    if not any(role in allowed_roles for role in user_roles):
+        await interaction.response.send_message("❌ このコマンドを使う権限がありません。", ephemeral=True)
+        return
+
+    user_id = str(member.id)
+    user_manager.init_user(user_id)
+
+    if amount <= 0:
+        await interaction.response.send_message("❌ 正の数を入力してください。", ephemeral=True)
+        return
+
+    success = user_manager.decrease_balance(user_id, amount)
+    if success:
+        await interaction.response.send_message(f"✅ {member.display_name} の残高を {amount} Vety 減額しました。")
+    else:
+        await interaction.response.send_message("❌ 減額に失敗しました（残高不足の可能性あり）。", ephemeral=True)
+
 client.run(TOKEN)
