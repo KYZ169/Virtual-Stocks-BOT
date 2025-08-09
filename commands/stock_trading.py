@@ -21,10 +21,12 @@ def get_all_stock_prices():
         c.execute("SELECT symbol, price FROM stocks ORDER BY symbol ASC")
         return c.fetchall()
     
-def get_current_price(symbol: str):
+def get_current_price(symbol: str) -> int | None:
+    symbol = symbol.upper()
     with get_connection() as conn:
-        cur = conn.execute("SELECT price FROM stocks WHERE symbol = ?", (symbol,))
-        row = cur.fetchone()
+        c = conn.cursor()
+        c.execute("SELECT price FROM stocks WHERE symbol = ?", (symbol,))
+        row = c.fetchone()
         return row[0] if row else None
 
 def update_balance(user_id: str, amount: float):
@@ -69,9 +71,17 @@ def sell_stock(user_id: str, symbol: str, amount: int, auto: bool = False):
 
         current_price = get_current_price(symbol)
         if current_price is None:
-            return "銘柄が存在しません"
-        
-        # 所有数確認
+            return {
+                "ok": False,
+                "message": "銘柄が存在しません",
+                "symbol": symbol,
+                "amount": 0,
+                "unit_price": None,
+                "total": None,
+                "profit_loss": None,
+            }
+
+        # 所有数確認（既存のまま）
         if auto:
             c.execute(
                 "SELECT COALESCE(SUM(amount), 0) FROM user_stocks "
@@ -90,12 +100,21 @@ def sell_stock(user_id: str, symbol: str, amount: int, auto: bool = False):
             amount = total_owned
 
         if total_owned < amount:
-            return f"保有数が不足しています（保有: {total_owned} < 要求: {amount}）"
+            return {
+                "ok": False,
+                "message": f"保有数が不足しています（保有: {total_owned} < 要求: {amount}）",
+                "symbol": symbol,
+                "amount": 0,
+                "unit_price": current_price,
+                "total": 0,
+                "profit_loss": 0,
+            }
 
         total_profit_or_loss = 0
         remaining = amount
+        sold_amount = 0
 
-        # 売却元取得（手動 or 自動）
+        # 売却元取得（既存のまま）
         if auto:
             c.execute(
                 "SELECT rowid, amount, buy_price FROM user_stocks "
@@ -113,9 +132,15 @@ def sell_stock(user_id: str, symbol: str, amount: int, auto: bool = False):
         rows = c.fetchall()
 
         if not rows:
-            return f"{symbol}を売却できる在庫が見つかりませんでした。"
-        
-        sold_amount = 0
+            return {
+                "ok": False,
+                "message": f"{symbol}を売却できる在庫が見つかりませんでした。",
+                "symbol": symbol,
+                "amount": 0,
+                "unit_price": current_price,
+                "total": 0,
+                "profit_loss": 0,
+            }
 
         # 売却処理（古い順）
         for rowid, owned, buy_price in rows:
@@ -128,7 +153,7 @@ def sell_stock(user_id: str, symbol: str, amount: int, auto: bool = False):
             profit_or_loss = revenue - cost
             total_profit_or_loss += profit_or_loss
 
-            # ✅ 還元処理（損失がある場合、stocksごとのadded_by_user_idを参照）
+            # 還元処理（既存）
             if profit_or_loss < 0:
                 loss = abs(profit_or_loss)
                 c.execute("SELECT added_by_user_id FROM stocks WHERE symbol = ?", (symbol,))
@@ -136,15 +161,17 @@ def sell_stock(user_id: str, symbol: str, amount: int, auto: bool = False):
                 added_by = added_by_result[0] if added_by_result else None
 
                 if added_by and added_by != user_id:
-                    c.execute("UPDATE balances SET balance = balance + ? WHERE user_id = ?", (int(loss), added_by))
+                    # ▼ 通貨指定（VETY）を明示（重要）
+                    c.execute("""
+                        INSERT OR IGNORE INTO balances(user_id, currency, balance)
+                        VALUES (?, 'VETY', 0)
+                    """, (added_by,))
+                    c.execute("""
+                        UPDATE balances SET balance = balance + ?
+                        WHERE user_id = ? AND currency = 'VETY'
+                    """, (int(loss), added_by))
 
-                # ✅ この位置に置くことでエラーを防げる
-                print(f"【DEBUG】損失 {loss}、追加者: {added_by}、売却者: {user_id}")
-            else:
-                # 損失がなかった場合でも DEBUG を出すならこちら
-                print(f"【DEBUG】損失なし、売却者: {user_id}")
-                
-            # 保有数更新
+            # 保有数更新（既存）
             if owned == sell_now:
                 c.execute("DELETE FROM user_stocks WHERE rowid = ?", (rowid,))
             else:
@@ -153,13 +180,29 @@ def sell_stock(user_id: str, symbol: str, amount: int, auto: bool = False):
             remaining -= sell_now
             sold_amount += sell_now
 
-        # 売却益を加算
+        # 売却益を加算（VETYに入れる）
         total_revenue = current_price * sold_amount
-        c.execute("UPDATE balances SET balance = balance + ? WHERE user_id = ?", (total_revenue, user_id))
+        c.execute("""
+            INSERT OR IGNORE INTO balances(user_id, currency, balance)
+            VALUES (?, 'VETY', 0)
+        """, (user_id,))
+        c.execute("""
+            UPDATE balances SET balance = balance + ?
+            WHERE user_id = ? AND currency = 'VETY'
+        """, (int(total_revenue), user_id))
 
         conn.commit()
-        return f"{symbol}を {sold_amount}口 売却し {round(total_revenue)}Vety を受け取りました。(損益：{round(total_profit_or_loss):+}Vety)"
 
+        msg = f"{symbol}を {sold_amount}口 売却し {round(total_revenue)} Vety を受け取りました。(損益：{round(total_profit_or_loss):+} Vety)"
+        return {
+            "ok": True,
+            "message": msg,
+            "symbol": symbol,
+            "amount": sold_amount,
+            "unit_price": current_price,
+            "total": int(round(total_revenue)),
+            "profit_loss": int(round(total_profit_or_loss)),
+        }
 # --- 株取引機能 ---
 
 def buy_stock(user_id: str, symbol: str, amount: int, auto_sell_minutes: int = 0):
@@ -224,4 +267,5 @@ def get_all_current_prices_message():
 # 非同期ラッパー：同期のsell_stockを非同期で使えるようにする
 async def sell_stock_async(user_id: str, symbol: str, amount: int, auto: bool = False):
     loop = asyncio.get_running_loop()
+    # sell_stock が dict を返す想定に変更
     return await loop.run_in_executor(None, sell_stock, user_id, symbol, amount, auto)

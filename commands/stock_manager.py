@@ -191,3 +191,11 @@ def get_all_symbols(limit: int = 25, prefix: str = "") -> list[str]:
             LIMIT ?
         """, (like, limit))
         return [row[0] for row in c.fetchall()]
+
+def get_current_price(symbol: str) -> int | None:
+    symbol = symbol.upper()
+    with get_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT price FROM stocks WHERE symbol = ?", (symbol,))
+        row = c.fetchone()
+        return row[0] if row else None

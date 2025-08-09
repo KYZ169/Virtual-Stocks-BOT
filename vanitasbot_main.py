@@ -33,6 +33,17 @@ async def autocomplete_symbols(interaction: discord.Interaction, current: str):
     syms = stock_manager.get_all_symbols(25, current or "")
     return [app_commands.Choice(name=s, value=s) for s in syms]
 
+# DM送付用
+async def _send_dm_safe(user: discord.User | discord.Member, content: str):
+    try:
+        await user.send(content)
+    except Exception:
+        # DMsを閉じている/ブロック等は無視
+        pass
+
+def _now():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
 @client.event
 async def on_ready():
     await tree.sync()
@@ -180,8 +191,36 @@ async def delete_stock_command(interaction: discord.Interaction, symbol: str):
 async def 買う(interaction: discord.Interaction, symbol: str, amount: int, auto_sell_minutes: int):
     user_id = str(interaction.user.id)
     stock_trading.init_user(user_id)
-    message = stock_trading.buy_stock(user_id, symbol.upper(), amount, auto_sell_minutes)
+    symbol_up = symbol.upper()
+
+    # 購入直前に現在価格（単価）を取得
+    unit_price = stock_manager.get_current_price(symbol_up)
+
+    message = stock_trading.buy_stock(user_id, symbol_up, amount, auto_sell_minutes)
     await interaction.response.send_message(message, ephemeral=True)
+
+    # ✅ DMログ
+    if unit_price is not None:
+        total = unit_price * amount
+        dm_text = (
+            f"🟢 **購入履歴**\n"
+            f"日時: {_now()}\n"
+            f"銘柄: {symbol_up}\n"
+            f"数量: {amount}\n"
+            f"単価: {unit_price}\n"
+            f"合計: {total}\n"
+            f"自動売却: {auto_sell_minutes} 分\n"
+        )
+    else:
+        dm_text = (
+            f"🟢 **購入履歴**\n"
+            f"日時: {_now()}\n"
+            f"銘柄: {symbol_up}\n"
+            f"数量: {amount}\n"
+            f"単価: 取得できませんでした\n"
+            f"自動売却: {auto_sell_minutes} 分\n"
+        )
+    await _send_dm_safe(interaction.user, dm_text)
 
 #銘柄を売る
 @tree.command(name="銘柄を売る", description="保有している銘柄を売却します")
@@ -189,10 +228,23 @@ async def 買う(interaction: discord.Interaction, symbol: str, amount: int, aut
 @app_commands.autocomplete(symbol=autocomplete_symbols)
 async def 売る(interaction: discord.Interaction, symbol: str, amount: int):
     user_id = str(interaction.user.id)
+    symbol_up = symbol.upper()
     try:
-        # ✅ 非同期ラッパーを使う（手動売却なので auto=False）
-        message = await stock_trading.sell_stock_async(user_id, symbol.upper(), amount, auto=False)
-        await interaction.response.send_message(message, ephemeral=True)
+        # 手動売却なので auto=False
+        result = await stock_trading.sell_stock_async(user_id, symbol_up, amount, auto=False)
+        await interaction.response.send_message(result["message"], ephemeral=True)
+
+        dm_text = (
+            "🔴 **売却履歴**\n"
+            f"日時: {_now()}\n"
+            f"銘柄: {result['symbol']}\n"
+            f"数量: {result['amount']}\n"
+            f"単価: {result.get('unit_price', '-')}\n"
+            f"合計: {result.get('total', '-')}\n"
+            f"損益: {result.get('profit_loss', '-')}\n"
+        )
+        await _send_dm_safe(interaction.user, dm_text)
+
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -216,9 +268,20 @@ async def auto_sell_loop(client):
 
         for user_id, symbol, amount in rows:
             try:
-                message = await stock_trading.sell_stock_async(user_id, symbol, amount, auto=True)
+                result = await stock_trading.sell_stock_async(user_id, symbol, amount, auto=True)
                 user = await client.fetch_user(int(user_id))
-                await user.send(f"💸 {message}")
+
+                dm_text = (
+                    "🟡 **自動売却履歴**\n"
+                    f"日時: {_now()}\n"
+                    f"銘柄: {result['symbol']}\n"
+                    f"数量: {result['amount']}\n"
+                    f"単価: {result.get('unit_price', '-')}\n"
+                    f"合計: {result.get('total', '-')}\n"
+                    f"損益: {result.get('profit_loss', '-')}\n"
+                )
+                await _send_dm_safe(user, dm_text)            
+                
             except Exception as e:
                 print(f"❌ 自動売却エラー: {e}")
 
