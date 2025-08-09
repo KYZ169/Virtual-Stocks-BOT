@@ -5,7 +5,45 @@ import sqlite3
 from datetime import datetime
 import os
 
-DB_PATH = "stock_data.db"
+# 絶対パスに変換し、sharedフォルダを自動作成
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_DIR = os.path.join(BASE_DIR, "..", "..", "shared")
+os.makedirs(DB_DIR, exist_ok=True)  # ← 重要: sharedディレクトリがなければ作る
+
+DB_PATH = os.path.join(DB_DIR, "shared.db")
+
+def _to_dt(ts):
+    """timestampが str / int(UNIX秒) / datetime / bytes など混在しても安全にdatetimeへ"""
+    if isinstance(ts, datetime):
+        return ts
+    if isinstance(ts, (bytes, bytearray)):
+        try:
+            ts = ts.decode()
+        except Exception:
+            return None
+    if isinstance(ts, str):
+        s = ts.strip()
+        if not s or s == "0":
+            return None
+        # ISO想定
+        try:
+            return datetime.fromisoformat(s)
+        except ValueError:
+            # 数字だけならUNIX秒として救済
+            if s.isdigit():
+                try:
+                    return datetime.fromtimestamp(int(s))
+                except Exception:
+                    return None
+            return None
+    if isinstance(ts, (int, float)):
+        if ts <= 0:
+            return None
+        try:
+            return datetime.fromtimestamp(ts)
+        except Exception:
+            return None
+    return None
 
 def generate_stock_graph(symbol: str, filename: str) -> bool:
     conn = sqlite3.connect(DB_PATH, timeout=10)
