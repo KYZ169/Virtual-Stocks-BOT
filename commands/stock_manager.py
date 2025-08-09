@@ -177,3 +177,17 @@ def get_price(symbol):
         cur = conn.execute("SELECT price FROM stocks WHERE symbol = ?", (symbol,))
         result = cur.fetchone()
         return result[0] if result else None
+    
+def get_all_symbols(limit: int = 25, prefix: str = "") -> list[str]:
+    """stocks.symbol を前方一致で返す"""
+    with get_connection() as conn:
+        c = conn.cursor()
+        like = f"{(prefix or '').upper()}%"
+        c.execute("""
+            SELECT symbol
+            FROM stocks
+            WHERE UPPER(symbol) LIKE ?
+            ORDER BY symbol
+            LIMIT ?
+        """, (like, limit))
+        return [row[0] for row in c.fetchall()]

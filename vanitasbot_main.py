@@ -8,6 +8,7 @@ from commands import user_manager
 from commands import stock_manager
 from commands import stock_trading
 from datetime import datetime
+from discord import app_commands, Interaction
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -26,6 +27,11 @@ class MyClient(discord.Client):
 
 client = MyClient()
 tree = client.tree  # ショートカット参照
+
+# 通貨候補用
+async def autocomplete_symbols(interaction: discord.Interaction, current: str):
+    syms = stock_manager.get_all_symbols(25, current or "")
+    return [app_commands.Choice(name=s, value=s) for s in syms]
 
 @client.event
 async def on_ready():
@@ -54,6 +60,7 @@ async def price_update_loop():
 #株価
 @tree.command(name="株価", description="銘柄の株価グラフを表示します")
 @app_commands.describe(symbol="銘柄コード（例: VELT）")
+@app_commands.autocomplete(symbol=autocomplete_symbols)
 async def 株価(interaction: discord.Interaction, symbol: str):
     symbol = symbol.upper()
     filename = f"{symbol}_graph.png"
@@ -154,6 +161,7 @@ async def add_stock_command(
 #銘柄削除
 @tree.command(name="銘柄削除", description="銘柄を削除します（管理者のみ）")
 @app_commands.describe(symbol="削除したい銘柄名（例: VELT）")
+@app_commands.autocomplete(symbol=autocomplete_symbols)
 async def delete_stock_command(interaction: discord.Interaction, symbol: str):
     allowed_roles = ['終界主', '宰律士']
     user_roles = [role.name for role in interaction.user.roles]
@@ -168,6 +176,7 @@ async def delete_stock_command(interaction: discord.Interaction, symbol: str):
 #銘柄を買う
 @tree.command(name="銘柄を買う", description="指定した銘柄を購入します")
 @app_commands.describe(symbol="銘柄名（例: VELT）", amount="購入口数", auto_sell_minutes="何分後に自動売却（0で手動）")
+@app_commands.autocomplete(symbol=autocomplete_symbols)
 async def 買う(interaction: discord.Interaction, symbol: str, amount: int, auto_sell_minutes: int):
     user_id = str(interaction.user.id)
     stock_trading.init_user(user_id)
@@ -177,6 +186,7 @@ async def 買う(interaction: discord.Interaction, symbol: str, amount: int, aut
 #銘柄を売る
 @tree.command(name="銘柄を売る", description="保有している銘柄を売却します")
 @app_commands.describe(symbol="銘柄名（例: VELT）", amount="売却する口数（空欄なら全数）")
+@app_commands.autocomplete(symbol=autocomplete_symbols)
 async def 売る(interaction: discord.Interaction, symbol: str, amount: int):
     user_id = str(interaction.user.id)
     try:
