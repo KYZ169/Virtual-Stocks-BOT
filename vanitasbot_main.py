@@ -67,7 +67,7 @@ async def 株価(interaction: discord.Interaction, symbol: str):
     await interaction.response.send_message(file=discord.File(full_path))
 
 #残高
-@tree.command(name="残高", description="あなたの残高を表示します")
+@tree.command(name="vety残高を確認する", description="あなたの残高を表示します")
 async def 残高(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
     user_manager.init_user(user_id)
@@ -75,7 +75,7 @@ async def 残高(interaction: discord.Interaction):
     await interaction.response.send_message(f"{interaction.user.display_name} の残高: {balance} Vety", ephemeral=True)
 
 #発行
-@tree.command(name="発行", description="他ユーザーにVetyを発行します（管理者のみ）")
+@tree.command(name="vetyを発行する", description="他ユーザーにVetyを発行します（管理者のみ）")
 @app_commands.describe(member="発行先ユーザー", amount="発行額")
 async def 発行(interaction: discord.Interaction, member: discord.Member, amount: float):
     allowed_roles = ['終界主', '宰律士']
@@ -213,7 +213,7 @@ async def auto_sell_loop(client):
                 print(f"❌ 自動売却エラー: {e}")
 
 # 送金コマンド
-@tree.command(name="送金", description="他ユーザーにVetyを送金します")
+@tree.command(name="vetyを送金する", description="他ユーザーにVetyを送金します")
 @app_commands.describe(member="送金先ユーザー", amount="送金額")
 async def 送金(interaction: discord.Interaction, member: discord.Member, amount: float):
     from_id = str(interaction.user.id)
@@ -237,7 +237,7 @@ async def 送金(interaction: discord.Interaction, member: discord.Member, amoun
         await interaction.response.send_message("❌ 残高が不足しています。", ephemeral=True)
 
 # 減額コマンド
-@tree.command(name="減額", description="指定ユーザーのVetyを減額します（管理者のみ）")
+@tree.command(name="vetyを減額する", description="指定ユーザーのVetyを減額します（管理者のみ）")
 @app_commands.describe(member="対象ユーザー", amount="減額額")
 async def 減額(interaction: discord.Interaction, member: discord.Member, amount: float):
     allowed_roles = ['終界主', '宰律士']

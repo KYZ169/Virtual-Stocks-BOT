@@ -1,10 +1,16 @@
 import sqlite3
+import os
 import random
 import time
 from datetime import datetime
 from discord.ext import tasks
 
-DB_PATH = "stock_data.db"
+# 絶対パスに変換し、sharedフォルダを自動作成
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_DIR = os.path.join(BASE_DIR, "..", "..", "shared")
+os.makedirs(DB_DIR, exist_ok=True)  # ← 重要: sharedディレクトリがなければ作る
+
+DB_PATH = os.path.join(DB_DIR, "shared.db")
 
 def get_connection():
     return sqlite3.connect(DB_PATH, timeout=10)
@@ -31,13 +37,6 @@ def init_db():
                 timestamp DATETIME,
                 price INTEGER,
                 delta INTEGER
-            )
-        """)
-        
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id TEXT PRIMARY KEY,
-                balance INTEGER
             )
         """)
         

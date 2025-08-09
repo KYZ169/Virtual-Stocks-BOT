@@ -1,10 +1,14 @@
-# stock_trading.py
-
 import sqlite3
+import os
 from datetime import datetime, timedelta
 import asyncio
 
-DB_PATH = "stock_data.db"
+# 絶対パスに変換し、sharedフォルダを自動作成
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_DIR = os.path.join(BASE_DIR, "..", "..", "shared")
+os.makedirs(DB_DIR, exist_ok=True)  # ← 重要: sharedディレクトリがなければ作る
+
+DB_PATH = os.path.join(DB_DIR, "shared.db")
 
 def get_connection():
     return sqlite3.connect(DB_PATH, timeout=10)
@@ -25,24 +29,27 @@ def get_current_price(symbol: str):
 
 def update_balance(user_id: str, amount: float):
     with get_connection() as conn:
-        conn.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+        conn.execute("UPDATE balances SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
 
 def get_balance(user_id: str):
     with get_connection() as conn:
-        cur = conn.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+        cur = conn.execute(
+            "SELECT balance FROM balances WHERE user_id = ? AND currency = 'VETY'",
+            (user_id,)
+        )
         row = cur.fetchone()
         return row[0] if row else 0.0
 
 def init_user(user_id: str):
     with get_connection() as conn:
-        conn.execute("INSERT OR IGNORE INTO users (user_id, balance) VALUES (?, ?)", (user_id, 0.0))
+        conn.execute("INSERT OR IGNORE INTO balances(user_id, balance) VALUES (?, ?)", (user_id, 0.0))
 
 def get_user_manual_stocks(user_id: str, symbol: str):
     with get_connection() as conn:
         c = conn.cursor()
         c.execute("""
             SELECT amount, buy_price FROM user_stocks
-            WHERE user_id = ? AND symbol = ? AND auto_sell_time IS NULL
+            WHERE user_id = ? AND currency = 'VETY'","AND symbol = ? AND auto_sell_time IS NULL
         """, (user_id, symbol))
         return c.fetchall()
     
@@ -66,9 +73,17 @@ def sell_stock(user_id: str, symbol: str, amount: int, auto: bool = False):
         
         # 所有数確認
         if auto:
-            c.execute("SELECT SUM(amount) FROM user_stocks WHERE user_id = ? AND symbol = ? AND auto_sell_time IS NOT NULL", (user_id, symbol))
+            c.execute(
+                "SELECT COALESCE(SUM(amount), 0) FROM user_stocks "
+                "WHERE user_id = ? AND symbol = ? AND auto_sell_time IS NOT NULL",
+                (user_id, symbol)
+            )
         else:
-            c.execute("SELECT SUM(amount) FROM user_stocks WHERE user_id = ? AND symbol = ? AND auto_sell_time IS NULL", (user_id, symbol))
+            c.execute(
+                "SELECT COALESCE(SUM(amount), 0) FROM user_stocks "
+                "WHERE user_id = ? AND symbol = ? AND auto_sell_time IS NULL",
+                (user_id, symbol)
+            )
         total_owned = c.fetchone()[0] or 0
 
         if amount == 0:
@@ -82,9 +97,19 @@ def sell_stock(user_id: str, symbol: str, amount: int, auto: bool = False):
 
         # 売却元取得（手動 or 自動）
         if auto:
-            c.execute("SELECT rowid, amount, buy_price FROM user_stocks WHERE user_id = ? AND symbol = ? AND auto_sell_time IS NOT NULL ORDER BY rowid ASC", (user_id, symbol))
+            c.execute(
+                "SELECT rowid, amount, buy_price FROM user_stocks "
+                "WHERE user_id = ? AND symbol = ? AND auto_sell_time IS NOT NULL "
+                "ORDER BY rowid ASC",
+                (user_id, symbol)
+            )
         else:
-            c.execute("SELECT rowid, amount, buy_price FROM user_stocks WHERE user_id = ? AND symbol = ? AND auto_sell_time IS NULL ORDER BY rowid ASC", (user_id, symbol))
+            c.execute(
+                "SELECT rowid, amount, buy_price FROM user_stocks "
+                "WHERE user_id = ? AND symbol = ? AND auto_sell_time IS NULL "
+                "ORDER BY rowid ASC",
+                (user_id, symbol)
+            )
         rows = c.fetchall()
 
         if not rows:
@@ -111,7 +136,7 @@ def sell_stock(user_id: str, symbol: str, amount: int, auto: bool = False):
                 added_by = added_by_result[0] if added_by_result else None
 
                 if added_by and added_by != user_id:
-                    c.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (int(loss), added_by))
+                    c.execute("UPDATE balances SET balance = balance + ? WHERE user_id = ?", (int(loss), added_by))
 
                 # ✅ この位置に置くことでエラーを防げる
                 print(f"【DEBUG】損失 {loss}、追加者: {added_by}、売却者: {user_id}")
@@ -130,7 +155,7 @@ def sell_stock(user_id: str, symbol: str, amount: int, auto: bool = False):
 
         # 売却益を加算
         total_revenue = current_price * sold_amount
-        c.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (total_revenue, user_id))
+        c.execute("UPDATE balances SET balance = balance + ? WHERE user_id = ?", (total_revenue, user_id))
 
         conn.commit()
         return f"{symbol}を {sold_amount}口 売却し {round(total_revenue)}Vety を受け取りました。(損益：{round(total_profit_or_loss):+}Vety)"
@@ -138,6 +163,9 @@ def sell_stock(user_id: str, symbol: str, amount: int, auto: bool = False):
 # --- 株取引機能 ---
 
 def buy_stock(user_id: str, symbol: str, amount: int, auto_sell_minutes: int = 0):
+    if amount <= 0:
+        return "購入数は1以上を指定してください。"
+
     with get_connection() as conn:
         c = conn.cursor()
 
@@ -145,13 +173,21 @@ def buy_stock(user_id: str, symbol: str, amount: int, auto_sell_minutes: int = 0
         if price is None:
             return "銘柄が存在しません"
 
-        total_cost = round(price * amount)
+        total_cost = int(round(price * amount))
         balance = get_balance(user_id)
         if balance < total_cost:
-            return f"残高不足（必要: {total_cost}）"
+            return f"残高不足（必要: {total_cost} Vety / 現在: {balance} Vety）"
 
-        # 残高減算
-        c.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (total_cost, user_id))
+        # 残高減算（★スペースとバインド修正）
+        c.execute(
+            "UPDATE balances SET balance = balance - ? WHERE user_id = ?",
+            (total_cost, user_id)
+        )
+
+        # 念のため、対象行がなければエラー返す（init_userが確実なら不要）
+        if c.rowcount == 0:
+            conn.rollback()
+            return "残高レコードが見つかりません（初期化が必要かも）。"
 
         auto_sell_time = (
             (datetime.now() + timedelta(minutes=auto_sell_minutes)).isoformat()
@@ -164,14 +200,15 @@ def buy_stock(user_id: str, symbol: str, amount: int, auto_sell_minutes: int = 0
                 symbol TEXT,
                 amount INTEGER,
                 buy_price REAL,
-                auto_sell_time TIMESTAMP
+                auto_sell_time TEXT
             )
-        """)
+        """)  # auto_sell_time は ISO文字列で保存
+
         c.execute("""
             INSERT INTO user_stocks (user_id, symbol, amount, buy_price, auto_sell_time)
             VALUES (?, ?, ?, ?, ?)
-        """, (user_id, symbol, amount, price, auto_sell_time))
-
+        """, (user_id, symbol.upper(), amount, float(price), auto_sell_time))
+        
         conn.commit()
         return f"{symbol} を 1口 {price}Vetyで{amount}口 購入しました（合計{price * amount}Vety）"
 

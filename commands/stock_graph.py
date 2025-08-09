@@ -3,7 +3,12 @@ import sqlite3
 import datetime
 import os
 
-DB_PATH = "stock_data.db"
+# 絶対パスに変換し、sharedフォルダを自動作成
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_DIR = os.path.join(BASE_DIR, "..", "..", "shared")
+os.makedirs(DB_DIR, exist_ok=True)  # ← 重要: sharedディレクトリがなければ作る
+
+DB_PATH = os.path.join(DB_DIR, "shared.db")
 
 def generate_stock_graph(symbol: str, filename: str) -> bool:
     conn = sqlite3.connect(DB_PATH, timeout=10)
