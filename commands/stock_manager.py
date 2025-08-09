@@ -1,10 +1,16 @@
 import sqlite3
+import os
 import random
 import time
 from datetime import datetime
 from discord.ext import tasks
 
-DB_PATH = "stock_data.db"
+# 絶対パスに変換し、sharedフォルダを自動作成
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_DIR = os.path.join(BASE_DIR, "..", "..", "shared")
+os.makedirs(DB_DIR, exist_ok=True)  # ← 重要: sharedディレクトリがなければ作る
+
+DB_PATH = os.path.join(DB_DIR, "shared.db")
 
 def get_connection():
     return sqlite3.connect(DB_PATH, timeout=10)
@@ -31,13 +37,6 @@ def init_db():
                 timestamp DATETIME,
                 price INTEGER,
                 delta INTEGER
-            )
-        """)
-        
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id TEXT PRIMARY KEY,
-                balance INTEGER
             )
         """)
         
@@ -178,3 +177,25 @@ def get_price(symbol):
         cur = conn.execute("SELECT price FROM stocks WHERE symbol = ?", (symbol,))
         result = cur.fetchone()
         return result[0] if result else None
+    
+def get_all_symbols(limit: int = 25, prefix: str = "") -> list[str]:
+    """stocks.symbol を前方一致で返す"""
+    with get_connection() as conn:
+        c = conn.cursor()
+        like = f"{(prefix or '').upper()}%"
+        c.execute("""
+            SELECT symbol
+            FROM stocks
+            WHERE UPPER(symbol) LIKE ?
+            ORDER BY symbol
+            LIMIT ?
+        """, (like, limit))
+        return [row[0] for row in c.fetchall()]
+
+def get_current_price(symbol: str) -> int | None:
+    symbol = symbol.upper()
+    with get_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT price FROM stocks WHERE symbol = ?", (symbol,))
+        row = c.fetchone()
+        return row[0] if row else None

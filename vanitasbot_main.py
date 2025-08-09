@@ -8,6 +8,7 @@ from commands import user_manager
 from commands import stock_manager
 from commands import stock_trading
 from datetime import datetime
+from discord import app_commands, Interaction
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -26,6 +27,22 @@ class MyClient(discord.Client):
 
 client = MyClient()
 tree = client.tree  # ショートカット参照
+
+# 通貨候補用
+async def autocomplete_symbols(interaction: discord.Interaction, current: str):
+    syms = stock_manager.get_all_symbols(25, current or "")
+    return [app_commands.Choice(name=s, value=s) for s in syms]
+
+# DM送付用
+async def _send_dm_safe(user: discord.User | discord.Member, content: str):
+    try:
+        await user.send(content)
+    except Exception:
+        # DMsを閉じている/ブロック等は無視
+        pass
+
+def _now():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 @client.event
 async def on_ready():
@@ -54,6 +71,7 @@ async def price_update_loop():
 #株価
 @tree.command(name="株価", description="銘柄の株価グラフを表示します")
 @app_commands.describe(symbol="銘柄コード（例: VELT）")
+@app_commands.autocomplete(symbol=autocomplete_symbols)
 async def 株価(interaction: discord.Interaction, symbol: str):
     symbol = symbol.upper()
     filename = f"{symbol}_graph.png"
@@ -67,7 +85,7 @@ async def 株価(interaction: discord.Interaction, symbol: str):
     await interaction.response.send_message(file=discord.File(full_path))
 
 #残高
-@tree.command(name="残高", description="あなたの残高を表示します")
+@tree.command(name="vety残高を確認する", description="あなたの残高を表示します")
 async def 残高(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
     user_manager.init_user(user_id)
@@ -75,7 +93,7 @@ async def 残高(interaction: discord.Interaction):
     await interaction.response.send_message(f"{interaction.user.display_name} の残高: {balance} Vety", ephemeral=True)
 
 #発行
-@tree.command(name="発行", description="他ユーザーにVetyを発行します（管理者のみ）")
+@tree.command(name="vetyを発行する", description="他ユーザーにVetyを発行します（管理者のみ）")
 @app_commands.describe(member="発行先ユーザー", amount="発行額")
 async def 発行(interaction: discord.Interaction, member: discord.Member, amount: float):
     allowed_roles = ['終界主', '宰律士']
@@ -154,6 +172,7 @@ async def add_stock_command(
 #銘柄削除
 @tree.command(name="銘柄削除", description="銘柄を削除します（管理者のみ）")
 @app_commands.describe(symbol="削除したい銘柄名（例: VELT）")
+@app_commands.autocomplete(symbol=autocomplete_symbols)
 async def delete_stock_command(interaction: discord.Interaction, symbol: str):
     allowed_roles = ['終界主', '宰律士']
     user_roles = [role.name for role in interaction.user.roles]
@@ -168,21 +187,64 @@ async def delete_stock_command(interaction: discord.Interaction, symbol: str):
 #銘柄を買う
 @tree.command(name="銘柄を買う", description="指定した銘柄を購入します")
 @app_commands.describe(symbol="銘柄名（例: VELT）", amount="購入口数", auto_sell_minutes="何分後に自動売却（0で手動）")
+@app_commands.autocomplete(symbol=autocomplete_symbols)
 async def 買う(interaction: discord.Interaction, symbol: str, amount: int, auto_sell_minutes: int):
     user_id = str(interaction.user.id)
     stock_trading.init_user(user_id)
-    message = stock_trading.buy_stock(user_id, symbol.upper(), amount, auto_sell_minutes)
+    symbol_up = symbol.upper()
+
+    # 購入直前に現在価格（単価）を取得
+    unit_price = stock_manager.get_current_price(symbol_up)
+
+    message = stock_trading.buy_stock(user_id, symbol_up, amount, auto_sell_minutes)
     await interaction.response.send_message(message, ephemeral=True)
+
+    # ✅ DMログ
+    if unit_price is not None:
+        total = unit_price * amount
+        dm_text = (
+            f"🟢 **購入履歴**\n"
+            f"日時: {_now()}\n"
+            f"銘柄: {symbol_up}\n"
+            f"数量: {amount}\n"
+            f"単価: {unit_price}\n"
+            f"合計: {total}\n"
+            f"自動売却: {auto_sell_minutes} 分\n"
+        )
+    else:
+        dm_text = (
+            f"🟢 **購入履歴**\n"
+            f"日時: {_now()}\n"
+            f"銘柄: {symbol_up}\n"
+            f"数量: {amount}\n"
+            f"単価: 取得できませんでした\n"
+            f"自動売却: {auto_sell_minutes} 分\n"
+        )
+    await _send_dm_safe(interaction.user, dm_text)
 
 #銘柄を売る
 @tree.command(name="銘柄を売る", description="保有している銘柄を売却します")
 @app_commands.describe(symbol="銘柄名（例: VELT）", amount="売却する口数（空欄なら全数）")
+@app_commands.autocomplete(symbol=autocomplete_symbols)
 async def 売る(interaction: discord.Interaction, symbol: str, amount: int):
     user_id = str(interaction.user.id)
+    symbol_up = symbol.upper()
     try:
-        # ✅ 非同期ラッパーを使う（手動売却なので auto=False）
-        message = await stock_trading.sell_stock_async(user_id, symbol.upper(), amount, auto=False)
-        await interaction.response.send_message(message, ephemeral=True)
+        # 手動売却なので auto=False
+        result = await stock_trading.sell_stock_async(user_id, symbol_up, amount, auto=False)
+        await interaction.response.send_message(result["message"], ephemeral=True)
+
+        dm_text = (
+            "🔴 **売却履歴**\n"
+            f"日時: {_now()}\n"
+            f"銘柄: {result['symbol']}\n"
+            f"数量: {result['amount']}\n"
+            f"単価: {result.get('unit_price', '-')}\n"
+            f"合計: {result.get('total', '-')}\n"
+            f"損益: {result.get('profit_loss', '-')}\n"
+        )
+        await _send_dm_safe(interaction.user, dm_text)
+
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -206,10 +268,69 @@ async def auto_sell_loop(client):
 
         for user_id, symbol, amount in rows:
             try:
-                message = await stock_trading.sell_stock_async(user_id, symbol, amount, auto=True)
+                result = await stock_trading.sell_stock_async(user_id, symbol, amount, auto=True)
                 user = await client.fetch_user(int(user_id))
-                await user.send(f"💸 {message}")
+
+                dm_text = (
+                    "🟡 **自動売却履歴**\n"
+                    f"日時: {_now()}\n"
+                    f"銘柄: {result['symbol']}\n"
+                    f"数量: {result['amount']}\n"
+                    f"単価: {result.get('unit_price', '-')}\n"
+                    f"合計: {result.get('total', '-')}\n"
+                    f"損益: {result.get('profit_loss', '-')}\n"
+                )
+                await _send_dm_safe(user, dm_text)            
+                
             except Exception as e:
                 print(f"❌ 自動売却エラー: {e}")
+
+# 送金コマンド
+@tree.command(name="vetyを送金する", description="他ユーザーにVetyを送金します")
+@app_commands.describe(member="送金先ユーザー", amount="送金額")
+async def 送金(interaction: discord.Interaction, member: discord.Member, amount: float):
+    from_id = str(interaction.user.id)
+    to_id = str(member.id)
+
+    user_manager.init_user(from_id)
+    user_manager.init_user(to_id)
+
+    if from_id == to_id:
+        await interaction.response.send_message("❌ 自分に送金することはできません。", ephemeral=True)
+        return
+
+    if amount <= 0:
+        await interaction.response.send_message("❌ 正の数を入力してください。", ephemeral=True)
+        return
+
+    success = user_manager.transfer_balance(from_id, to_id, amount)
+    if success:
+        await interaction.response.send_message(f"✅ {interaction.user.display_name} から {member.display_name} に {amount} Vety を送金しました。")
+    else:
+        await interaction.response.send_message("❌ 残高が不足しています。", ephemeral=True)
+
+# 減額コマンド
+@tree.command(name="vetyを減額する", description="指定ユーザーのVetyを減額します（管理者のみ）")
+@app_commands.describe(member="対象ユーザー", amount="減額額")
+async def 減額(interaction: discord.Interaction, member: discord.Member, amount: float):
+    allowed_roles = ['終界主', '宰律士']
+    user_roles = [role.name for role in interaction.user.roles]
+
+    if not any(role in allowed_roles for role in user_roles):
+        await interaction.response.send_message("❌ このコマンドを使う権限がありません。", ephemeral=True)
+        return
+
+    user_id = str(member.id)
+    user_manager.init_user(user_id)
+
+    if amount <= 0:
+        await interaction.response.send_message("❌ 正の数を入力してください。", ephemeral=True)
+        return
+
+    success = user_manager.decrease_balance(user_id, amount)
+    if success:
+        await interaction.response.send_message(f"✅ {member.display_name} の残高を {amount} Vety 減額しました。")
+    else:
+        await interaction.response.send_message("❌ 減額に失敗しました（残高不足の可能性あり）。", ephemeral=True)
 
 client.run(TOKEN)
