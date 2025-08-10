@@ -223,8 +223,8 @@ def buy_stock(user_id: str, symbol: str, amount: int, auto_sell_minutes: int = 0
 
         # 残高減算（★スペースとバインド修正）
         c.execute(
-            "UPDATE balances SET balance = balance - ? WHERE user_id = ?",
-            (total_cost, user_id)
+            "UPDATE balances SET balance = balance - ? WHERE user_id = ? AND currency = 'VETY'",
+            (total_cost, user_id, "VETY")
         )
 
         # 念のため、対象行がなければエラー返す（init_userが確実なら不要）
