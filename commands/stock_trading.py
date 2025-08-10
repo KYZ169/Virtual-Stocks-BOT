@@ -31,7 +31,7 @@ def get_current_price(symbol: str) -> int | None:
 
 def update_balance(user_id: str, amount: float):
     with get_connection() as conn:
-        conn.execute("UPDATE balances SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+        conn.execute("UPDATE balances SET balance = balance + ? WHERE user_id = ? AND currency = 'VETY'", (amount, user_id))
 
 def get_balance(user_id: str):
     with get_connection() as conn:

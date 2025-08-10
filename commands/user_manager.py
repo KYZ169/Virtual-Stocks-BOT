@@ -54,7 +54,7 @@ def add_balance(user_id: str, amount: float):
         c.execute("""
             UPDATE balances
             SET balance = balance + ?
-            WHERE user_id = ?
+            WHERE user_id = ? AND currency = 'VETY'
         """, (amount, user_id))
 
 def decrease_balance(user_id: str, amount: float, currency: str = "VETY") -> bool:
